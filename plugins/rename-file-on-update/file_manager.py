@@ -46,6 +46,7 @@ SCENE_VARIABLES = {
     "studio_code": key_getter("code"),
     "studio_name": lambda _, scene: scene.get("studio", {}).get("name", ""),
     "year": lambda _, scene: scene.get("date", "").split("-")[0] if scene.get("date") else "",
+    "stashdb_id": lambda _, scene: next((s["stash_id"] for s in scene.get("stash_ids", []) if "stashdb.org" in s.get("endpoint", "")), ""),
 }
 
 def find_variables(format_template) -> list[str]:
