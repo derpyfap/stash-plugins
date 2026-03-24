@@ -191,6 +191,10 @@ class StashFile:
             log.info("File paths are the same, no renaming needed.")
             return
 
+	if old_path.name == new_path.name:
+	    log.info("File name is the same, skipping move.")
+	    return
+
         log.debug(f"Checking if a file exists at {new_path}")
         while new_path.exists():
             self.duplicate_index += 1
