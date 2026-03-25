@@ -73,7 +73,7 @@ def clean_optional_from_format(formatted_string: str) -> str:
     return formatted_string
 
 
-def apply_format(format_template: str, stash: StashInterface, scene_data, file_data)-> str:
+def apply_format(format_template: str, stash: StashInterface, scene_data, file_data) -> str:
     variables = find_variables(format_template)
 
     formatted_template = format_template
@@ -116,7 +116,7 @@ class StashFile:
             directory_path = path.parent.absolute()
 
         return directory_path
-    
+
     def get_new_file_name(self) -> str:
         if not self.config.default_file_name_format:
             return self.file_data["basename"]
@@ -181,6 +181,18 @@ class StashFile:
 
     def rename_file(self):
         old_path = self.get_old_file_path()
+
+        # Check if this file lives under an excluded folder
+        excluded_folders = self.config.excluded_folders
+        if excluded_folders:
+            for folder in excluded_folders:
+                try:
+                    old_path.relative_to(folder)
+                    log.info(f"File is in excluded folder '{folder}', skipping: {old_path}")
+                    return
+                except ValueError:
+                    pass  # Not under this folder, continue checking
+
         new_path = self.get_new_file_path()
 
         if not old_path.exists():
@@ -191,9 +203,10 @@ class StashFile:
             log.info("File paths are the same, no renaming needed.")
             return
 
-	if old_path.name == new_path.name:
-	    log.info("File name is the same, skipping move.")
-	    return
+        # BUG FIX: was using tab indentation, causing IndentationError on import
+        if old_path.name == new_path.name:
+            log.info("File name is the same, skipping move.")
+            return
 
         log.debug(f"Checking if a file exists at {new_path}")
         while new_path.exists():
@@ -215,11 +228,12 @@ class StashFile:
             MOVE_FILE_MUTATION,
             {"input": {
                     "ids": [self.file_data["id"]],
-                    "destination_folder": self.get_new_file_folder(),
+                    "destination_folder": str(self.get_new_file_folder()),
                     "destination_basename": self.get_new_file_name(),
                 }
             }
         )
 
         log.info(f"File renamed successfully: {moved_file}")
-        self.rename_related_files(oldpath, new_path, dry_run=False)
+        # BUG FIX: was `oldpath` (NameError), corrected to `old_path`
+        self.rename_related_files(old_path, new_path, dry_run=False)
