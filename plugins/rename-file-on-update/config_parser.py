@@ -6,7 +6,9 @@ class Config:
         "renameUnorganized": False,
         "renameRelatedFiles": True,
         "removeExtraSpacesFromFileName": False,
+        "allowUnsafeCharacters": False,
         "duplicateFileSuffix": " ($index$)",
+        "excludedFolders": "",
     }
 
     def __init__(self, config):
@@ -21,6 +23,11 @@ class Config:
             return stash_config
 
         return Config.DEFAULT_CONFIG.get(config_name)
+
+    @property
+    def excluded_folders(self) -> list[str]:
+        raw = self.config.get("excludedFolders", "") or ""
+        return [f.strip().rstrip("/") for f in raw.split(",") if f.strip()]
 
     @staticmethod
     def __to_camel_case(snake_str):

@@ -1,6 +1,6 @@
 name: Rename File on Update
 description: Renames files when they are updated in Stash.
-version: 0.1.0
+version: 0.1.1
 exec:
   - python
   - "{pluginDir}/rename_file_on_update.py"
@@ -46,6 +46,12 @@ settings:
     displayName: Allow unsafe characters
     description: If enabled, the plugin will allow unsafe characters in file names and directory paths.
     type: BOOLEAN
+  excludedFolders:
+    displayName: Excluded folders
+    description: |
+      Comma-separated list of folder paths to exclude from renaming (e.g. /data/keep/,/mnt/archive/).
+      Files whose current path begins with any of these folders will be skipped entirely.
+    type: STRING
 
 tasks:
   - name: Rename scenes
