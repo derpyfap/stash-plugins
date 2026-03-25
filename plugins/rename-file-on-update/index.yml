@@ -2,7 +2,7 @@
   name: Rename File on Update
   metadata:
     description: Renames files when they are updated in Stash.
-  version: 0.1.1-677b421
+  version: 0.1.1-0631ba4
   date: 2026-03-23 00:00:00
   path: rename-file-on-update.zip
-  sha256: a40db16a8fa5d01f70466294cd97ede98ee5ec61229f236a053269ce4c493acc
+  sha256: 300a98d7845b5beb8fbab2a3e6e3c0e22c071478e2f5c105341fc51b31933b8a
