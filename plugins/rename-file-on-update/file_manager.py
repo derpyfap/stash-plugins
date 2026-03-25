@@ -137,6 +137,16 @@ class StashFile:
         if self.config.remove_extra_spaces_from_file_name:
             file_name = re.sub(r"\s+", " ", file_name)
 
+        # Truncate filename if it exceeds Linux's 255 character limit
+        max_length = 255
+        if len(file_name) > max_length:
+            extension = file_name.rsplit(".", 1)[-1]
+            base_name = file_name.rsplit(".", 1)[0]
+            max_base_length = max_length - len(extension) - 1
+            base_name = base_name[:max_base_length].rstrip()
+            file_name = f"{base_name}.{extension}"
+            log.warning(f"File name too long, truncated to: {file_name}")
+
         return file_name
 
     def get_new_file_path(self) -> pathlib.Path:
@@ -224,16 +234,18 @@ class StashFile:
             self.rename_related_files(old_path, new_path, dry_run=True)
             return
 
-        moved_file = self.stash.call_GQL(
-            MOVE_FILE_MUTATION,
-            {"input": {
-                    "ids": [self.file_data["id"]],
-                    "destination_folder": str(self.get_new_file_folder()),
-                    "destination_basename": self.get_new_file_name(),
+        try:
+            moved_file = self.stash.call_GQL(
+                MOVE_FILE_MUTATION,
+                {"input": {
+                        "ids": [self.file_data["id"]],
+                        "destination_folder": str(self.get_new_file_folder()),
+                        "destination_basename": self.get_new_file_name(),
+                    }
                 }
-            }
-        )
-
-        log.info(f"File renamed successfully: {moved_file}")
-        # BUG FIX: was `oldpath` (NameError), corrected to `old_path`
-        self.rename_related_files(old_path, new_path, dry_run=False)
+            )
+            log.info(f"File renamed successfully: {moved_file}")
+            # BUG FIX: was `oldpath` (NameError), corrected to `old_path`
+            self.rename_related_files(old_path, new_path, dry_run=False)
+        except Exception as e:
+            log.error(f"Failed to rename file {old_path}: {e}")
