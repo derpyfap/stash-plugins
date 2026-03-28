@@ -1,4 +1,3 @@
-from operator import itemgetter
 from stashapi.stashapp import StashInterface
 from stashapi import log
 import pathlib
@@ -44,9 +43,13 @@ SCENE_VARIABLES = {
     "month": lambda _, scene: scene.get("date", "").split("-")[1] if scene.get("date") else "",
     "parent_studio_chain": get_parent_studio_chain,
     "studio_code": key_getter("code"),
+    "stashdb_id": lambda _, scene: next(
+        (s["stash_id"] for s in scene.get("stash_ids", [])
+         if s.get("endpoint") == "https://stashdb.org/graphql"),
+        ""
+    ),
     "studio_name": lambda _, scene: scene.get("studio", {}).get("name", ""),
     "year": lambda _, scene: scene.get("date", "").split("-")[0] if scene.get("date") else "",
-    "stashdb_id": lambda _, scene: next((s["stash_id"] for s in scene.get("stash_ids", []) if "stashdb.org" in s.get("endpoint", "")), ""),
 }
 
 def find_variables(format_template) -> list[str]:
@@ -64,16 +67,19 @@ def find_variables(format_template) -> list[str]:
 
 
 def clean_optional_from_format(formatted_string: str) -> str:
-    # Erase entire optional section if there is an unused variable
-    formatted_string = re.sub(r"\{.*\$\w+\$.*\}", "", formatted_string)
+    # Erase entire optional section if there is an unused variable.
+    # [$] is used instead of \$ because \$ in Python re is a zero-width
+    # end-of-line anchor, not a literal dollar sign match.
+    # [^{}]* prevents greedy matching from consuming across multiple blocks.
+    formatted_string = re.sub(r'\{[^{}]*[$]\w+[$][^{}]*\}', '', formatted_string)
 
     # Remove any remaining curly braces
-    formatted_string = formatted_string.replace(r"{", "").replace(r"}", "")
+    formatted_string = formatted_string.replace("{", "").replace("}", "")
 
     return formatted_string
 
 
-def apply_format(format_template: str, stash: StashInterface, scene_data, file_data) -> str:
+def apply_format(format_template: str, stash: StashInterface, scene_data, file_data)-> str:
     variables = find_variables(format_template)
 
     formatted_template = format_template
@@ -116,7 +122,7 @@ class StashFile:
             directory_path = path.parent.absolute()
 
         return directory_path
-
+    
     def get_new_file_name(self) -> str:
         if not self.config.default_file_name_format:
             return self.file_data["basename"]
@@ -126,10 +132,12 @@ class StashFile:
 
         if self.duplicate_index:
             duplicate_suffix = apply_format(self.config.duplicate_file_suffix, self.stash, self.scene_data, file_data)
-            base_name = file_name.rsplit(".", 1)[0]
-            extension = file_name.rsplit(".", 1)[1]
+            parts = file_name.rsplit(".", 1)
+            base_name = parts[0]
+            extension = parts[1] if len(parts) > 1 else ""
+            suffix_dot = f".{extension}" if extension else ""
 
-            file_name = f"{base_name}{duplicate_suffix}.{extension}"
+            file_name = f"{base_name}{duplicate_suffix}{suffix_dot}"
 
         if not self.config.allow_unsafe_characters:
             file_name = re.sub(r"[<>:\"/\\|?*]", "", file_name)
@@ -137,20 +145,20 @@ class StashFile:
         if self.config.remove_extra_spaces_from_file_name:
             file_name = re.sub(r"\s+", " ", file_name)
 
-        # Truncate filename if it exceeds Linux's 255 character limit
-        max_length = 255
-        if len(file_name) > max_length:
-            extension = file_name.rsplit(".", 1)[-1]
-            base_name = file_name.rsplit(".", 1)[0]
-            max_base_length = max_length - len(extension) - 1
-            base_name = base_name[:max_base_length].rstrip()
-            file_name = f"{base_name}.{extension}"
-            log.warning(f"File name too long, truncated to: {file_name}")
-
         return file_name
 
     def get_new_file_path(self) -> pathlib.Path:
         return self.get_new_file_folder() / self.get_new_file_name()
+
+    def is_in_ignored_folder(self, path: pathlib.Path) -> bool:
+        for folder in self.config.ignored_folders:
+            ignored = pathlib.Path(folder).absolute()
+            try:
+                path.relative_to(ignored)
+                return True
+            except ValueError:
+                continue
+        return False
 
     def rename_related_files(self, old_path: pathlib.Path, new_path: pathlib.Path, dry_run: bool):
         if not self.config.rename_related_files:
@@ -192,30 +200,25 @@ class StashFile:
     def rename_file(self):
         old_path = self.get_old_file_path()
 
-        # Check if this file lives under an excluded folder
-        excluded_folders = self.config.excluded_folders
-        if excluded_folders:
-            for folder in excluded_folders:
-                try:
-                    old_path.relative_to(folder)
-                    log.info(f"File is in excluded folder '{folder}', skipping: {old_path}")
-                    return
-                except ValueError:
-                    pass  # Not under this folder, continue checking
-
-        new_path = self.get_new_file_path()
-
         if not old_path.exists():
             log.warning(f"File for scene does not exist on disk: {old_path}")
             return
 
-        if old_path == new_path:
-            log.info("File paths are the same, no renaming needed.")
+        # Never touch files inside ignored folders
+        if self.is_in_ignored_folder(old_path):
+            log.info(f"File is in an ignored folder, skipping: {old_path}")
             return
 
-        # BUG FIX: was using tab indentation, causing IndentationError on import
-        if old_path.name == new_path.name:
-            log.info("File name is the same, skipping move.")
+        # Only proceed if the basename is actually changing — no rename means no move
+        new_file_name = self.get_new_file_name()
+        if new_file_name == self.file_data["basename"]:
+            log.info(f"File name is already correct, skipping: {old_path}")
+            return
+
+        new_path = self.get_new_file_path()
+
+        if old_path == new_path:
+            log.info("File paths are the same, no renaming needed.")
             return
 
         log.debug(f"Checking if a file exists at {new_path}")
@@ -234,18 +237,15 @@ class StashFile:
             self.rename_related_files(old_path, new_path, dry_run=True)
             return
 
-        try:
-            moved_file = self.stash.call_GQL(
-                MOVE_FILE_MUTATION,
-                {"input": {
-                        "ids": [self.file_data["id"]],
-                        "destination_folder": str(self.get_new_file_folder()),
-                        "destination_basename": self.get_new_file_name(),
-                    }
+        moved_file = self.stash.call_GQL(
+            MOVE_FILE_MUTATION,
+            {"input": {
+                    "ids": [self.file_data["id"]],
+                    "destination_folder": str(self.get_new_file_folder()),
+                    "destination_basename": self.get_new_file_name(),
                 }
-            )
-            log.info(f"File renamed successfully: {moved_file}")
-            # BUG FIX: was `oldpath` (NameError), corrected to `old_path`
-            self.rename_related_files(old_path, new_path, dry_run=False)
-        except Exception as e:
-            log.error(f"Failed to rename file {old_path}: {e}")
+            }
+        )
+
+        log.info(f"File renamed successfully: {moved_file}")
+        self.rename_related_files(old_path, new_path, dry_run=False)

@@ -19,11 +19,6 @@ studio {
     }
 }
 
-stash_ids {
-    endpoint
-    stash_id
-}
-
 files {
     id
     path
@@ -35,6 +30,11 @@ files {
     duration
     video_codec
     audio_codec
+}
+
+stash_ids {
+    endpoint
+    stash_id
 }
 """
 
@@ -55,4 +55,4 @@ def rename_scene(stash: StashInterface, config: Config, args):
         stash_file.rename_file()
 
 def rename_all_scenes(stash: StashInterface, config: Config):
-    log.info("Checking all scenes")
+    log.warning("rename_all_scenes is not yet implemented. No files were renamed.")
