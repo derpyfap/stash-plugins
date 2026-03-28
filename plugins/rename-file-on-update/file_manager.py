@@ -145,7 +145,53 @@ class StashFile:
         if self.config.remove_extra_spaces_from_file_name:
             file_name = re.sub(r"\s+", " ", file_name)
 
+        file_name = self._truncate_filename(file_name)
+
         return file_name
+
+    @staticmethod
+    def _truncate_filename(file_name: str, max_bytes: int = 255) -> str:
+        """
+        Truncate a filename to fit within the OS byte limit (255 bytes on Linux).
+        Preserves the file extension and any trailing bracketed suffix (e.g. a
+        StashDB UUID like '[f53175c6-...deb]') by trimming characters from the
+        portion of the stem that precedes the suffix.
+        """
+        if len(file_name.encode("utf-8")) <= max_bytes:
+            return file_name
+
+        parts = file_name.rsplit(".", 1)
+        stem = parts[0]
+        extension = f".{parts[1]}" if len(parts) > 1 else ""
+
+        # Detect a trailing bracketed suffix, e.g. ' [uuid]'
+        bracket_match = re.search(r"(\s*\[[^\]]+\])$", stem)
+        if bracket_match:
+            suffix = bracket_match.group(1)
+            prefix = stem[: bracket_match.start()]
+        else:
+            suffix = ""
+            prefix = stem
+
+        # Calculate how many bytes are available for the prefix
+        extension_bytes = len(extension.encode("utf-8"))
+        suffix_bytes = len(suffix.encode("utf-8"))
+        max_prefix_bytes = max_bytes - extension_bytes - suffix_bytes
+
+        if max_prefix_bytes <= 0:
+            # Edge case: suffix + extension alone exceed the limit — just hard-truncate
+            combined = (suffix + extension).encode("utf-8")[:max_bytes]
+            result = combined.decode("utf-8", errors="ignore")
+            log.warning(f"Filename too long even after dropping title, hard-truncated: {result}")
+            return result
+
+        prefix_encoded = prefix.encode("utf-8")
+        if len(prefix_encoded) > max_prefix_bytes:
+            truncated = prefix_encoded[:max_prefix_bytes]
+            prefix = truncated.decode("utf-8", errors="ignore").rstrip()
+            log.warning(f"Filename too long, truncated title portion to fit OS 255-byte limit: {prefix}{suffix}{extension}")
+
+        return f"{prefix}{suffix}{extension}"
 
     def get_new_file_path(self) -> pathlib.Path:
         return self.get_new_file_folder() / self.get_new_file_name()
@@ -159,6 +205,24 @@ class StashFile:
             except ValueError:
                 continue
         return False
+
+    def is_in_stashdb_folder(self, path: pathlib.Path) -> bool:
+        """
+        Returns True if the file's immediate parent folder name contains
+        [stashdb_uuid] matching this scene's StashDB ID. This indicates
+        the file has already been imported by Whisparr into its managed
+        folder structure — the plugin should leave it alone.
+        """
+        stashdb_id = next(
+            (s["stash_id"] for s in self.scene_data.get("stash_ids", [])
+             if s.get("endpoint") == "https://stashdb.org/graphql"),
+            None
+        )
+        if not stashdb_id:
+            return False
+
+        folder_name = path.parent.name
+        return f"[{stashdb_id}]" in folder_name
 
     def rename_related_files(self, old_path: pathlib.Path, new_path: pathlib.Path, dry_run: bool):
         if not self.config.rename_related_files:
@@ -176,12 +240,19 @@ class StashFile:
             return
 
         for related_file in related_files:
-            target_path = new_directory / f"{new_path.stem}{related_file.suffix}"
+            related_name = self._truncate_filename(f"{new_path.stem}{related_file.suffix}")
+            target_path = new_directory / related_name
 
             if related_file == target_path:
                 continue
 
-            if target_path.exists():
+            try:
+                path_exists = target_path.exists()
+            except OSError as e:
+                log.error(f"Could not check if related file target exists (path too long?): {target_path}: {e}")
+                continue
+
+            if path_exists:
                 log.warning(f"Related file already exists at {target_path}, skipping rename for {related_file}")
                 continue
 
@@ -207,6 +278,12 @@ class StashFile:
         # Never touch files inside ignored folders
         if self.is_in_ignored_folder(old_path):
             log.info(f"File is in an ignored folder, skipping: {old_path}")
+            return
+
+        # File is already in a Whisparr-managed folder containing the StashDB UUID —
+        # Whisparr owns this file, do not rename or move it
+        if self.is_in_stashdb_folder(old_path):
+            log.info(f"File is already in a StashDB-matched folder, skipping: {old_path}")
             return
 
         # Only proceed if the basename is actually changing — no rename means no move
